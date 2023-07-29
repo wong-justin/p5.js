@@ -2,6 +2,7 @@
 .project
 node_modules/*
 experiments/*
+!lib/p5.js
 lib_old/*
 lib/p5.*
 lib/modules
