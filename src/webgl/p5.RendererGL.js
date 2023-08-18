@@ -79,7 +79,6 @@ const defaultShaders = {
   pointFrag: readFileSync(join(__dirname, '/shaders/point.frag'), 'utf-8')
 };
 
-// TODO: add remaining filter shaders
 const filterShaderFrags = {
   [constants.GRAY]:
     readFileSync(join(__dirname, '/shaders/filters/gray.frag'), 'utf-8'),
@@ -90,7 +89,13 @@ const filterShaderFrags = {
   [constants.BLUR]:
     readFileSync(join(__dirname, '/shaders/filters/blur.frag'), 'utf-8'),
   [constants.POSTERIZE]:
-    readFileSync(join(__dirname, '/shaders/filters/posterize.frag'), 'utf-8')
+    readFileSync(join(__dirname, '/shaders/filters/posterize.frag'), 'utf-8'),
+  [constants.OPAQUE]:
+    readFileSync(join(__dirname, '/shaders/filters/opaque.frag'), 'utf-8'),
+  [constants.INVERT]:
+    readFileSync(join(__dirname, '/shaders/filters/invert.frag'), 'utf-8'),
+  [constants.THRESHOLD]:
+    readFileSync(join(__dirname, '/shaders/filters/threshold.frag'), 'utf-8')
 };
 const filterShaderVert = readFileSync(join(__dirname, '/shaders/filters/default.vert'), 'utf-8');
 
@@ -488,7 +493,7 @@ p5.RendererGL = class RendererGL extends p5.Renderer {
     this._useLineColor = false;
     this._useVertexColor = false;
 
-    this.registerEnabled = [];
+    this.registerEnabled = new Set();
 
     this._tint = [255, 255, 255, 255];
 
@@ -540,10 +545,10 @@ p5.RendererGL = class RendererGL extends p5.Renderer {
       geometry: {},
       buffers: {
         stroke: [
-          new p5.RenderBuffer(4, 'lineVertexColors', 'lineColorBuffer', 'aVertexColor', this, this._flatten),
-          new p5.RenderBuffer(3, 'lineVertices', 'lineVerticesBuffer', 'aPosition', this, this._flatten),
-          new p5.RenderBuffer(3, 'lineTangentsIn', 'lineTangentsInBuffer', 'aTangentIn', this, this._flatten),
-          new p5.RenderBuffer(3, 'lineTangentsOut', 'lineTangentsOutBuffer', 'aTangentOut', this, this._flatten),
+          new p5.RenderBuffer(4, 'lineVertexColors', 'lineColorBuffer', 'aVertexColor', this),
+          new p5.RenderBuffer(3, 'lineVertices', 'lineVerticesBuffer', 'aPosition', this),
+          new p5.RenderBuffer(3, 'lineTangentsIn', 'lineTangentsInBuffer', 'aTangentIn', this),
+          new p5.RenderBuffer(3, 'lineTangentsOut', 'lineTangentsOutBuffer', 'aTangentOut', this),
           new p5.RenderBuffer(1, 'lineSides', 'lineSidesBuffer', 'aSide', this)
         ],
         fill: [
@@ -579,10 +584,10 @@ p5.RendererGL = class RendererGL extends p5.Renderer {
           new p5.RenderBuffer(2, 'uvs', 'uvBuffer', 'aTexCoord', this, this._flatten)
         ],
         stroke: [
-          new p5.RenderBuffer(4, 'lineVertexColors', 'lineColorBuffer', 'aVertexColor', this, this._flatten),
-          new p5.RenderBuffer(3, 'lineVertices', 'lineVerticesBuffer', 'aPosition', this, this._flatten),
-          new p5.RenderBuffer(3, 'lineTangentsIn', 'lineTangentsInBuffer', 'aTangentIn', this, this._flatten),
-          new p5.RenderBuffer(3, 'lineTangentsOut', 'lineTangentsOutBuffer', 'aTangentOut', this, this._flatten),
+          new p5.RenderBuffer(4, 'lineVertexColors', 'lineColorBuffer', 'aVertexColor', this),
+          new p5.RenderBuffer(3, 'lineVertices', 'lineVerticesBuffer', 'aPosition', this),
+          new p5.RenderBuffer(3, 'lineTangentsIn', 'lineTangentsInBuffer', 'aTangentIn', this),
+          new p5.RenderBuffer(3, 'lineTangentsOut', 'lineTangentsOutBuffer', 'aTangentOut', this),
           new p5.RenderBuffer(1, 'lineSides', 'lineSidesBuffer', 'aSide', this)
         ],
         point: this.GL.createBuffer()
@@ -605,6 +610,7 @@ p5.RendererGL = class RendererGL extends p5.Renderer {
     // for post processing step
     this.filterShader = undefined;
     this.filterGraphicsLayer = undefined;
+    this.defaultFilterShaders = {};
 
     this.textureMode = constants.IMAGE;
     // default wrap settings
@@ -989,12 +995,25 @@ p5.RendererGL = class RendererGL extends p5.Renderer {
     let filterParameter = undefined;
     if (typeof args[0] === 'string') {
       let operation = args[0];
-      filterParameter = args[1];
-      this.filterShader = new p5.Shader(
-        pg._renderer,
-        filterShaderVert,
-        filterShaderFrags[operation]
-      );
+      let defaults = {
+        [constants.BLUR]: 4,
+        [constants.POSTERIZE]: 4,
+        [constants.THRESHOLD]: 0.5
+      };
+      let useDefaultParam = operation in defaults && args[1] === undefined;
+      filterParameter = useDefaultParam ? defaults[operation] : args[1];
+
+      // Create and store shader for constants once on initial filter call.
+      // Need to store multiple in case user calls different filters,
+      // eg. filter(BLUR) then filter(GRAY)
+      if ( !(operation in this.defaultFilterShaders) ) {
+        this.defaultFilterShaders[operation] = new p5.Shader(
+          pg._renderer,
+          filterShaderVert,
+          filterShaderFrags[operation]
+        );
+      }
+      this.filterShader = this.defaultFilterShaders[operation];
     }
     // use custom user-supplied shader
     else {
@@ -1018,6 +1037,7 @@ p5.RendererGL = class RendererGL extends p5.Renderer {
     pg.shader(this.filterShader);
     this.filterShader.setUniform('tex0', this);
     this.filterShader.setUniform('texelSize', [1.0/this.width, 1.0/this.height]);
+    this.filterShader.setUniform('canvasSize', [this.width, this.height]);
     // filterParameter only used for POSTERIZE, BLUR, and THRESHOLD
     // but shouldn't hurt to always set
     this.filterShader.setUniform('filterParameter', filterParameter);
@@ -1276,6 +1296,11 @@ p5.RendererGL = class RendererGL extends p5.Renderer {
     return this.retainedMode.geometry[gId] !== undefined;
   }
 
+  viewport(w, h) {
+    this._viewport = [0, 0, w, h];
+    this.GL.viewport(0, 0, w, h);
+  }
+
   /**
  * [resize description]
  * @private
@@ -1284,13 +1309,14 @@ p5.RendererGL = class RendererGL extends p5.Renderer {
  */
   resize(w, h) {
     p5.Renderer.prototype.resize.call(this, w, h);
-    this.GL.viewport(
-      0,
-      0,
-      this.GL.drawingBufferWidth,
-      this.GL.drawingBufferHeight
+    this._origViewport = {
+      width: this.GL.drawingBufferWidth,
+      height: this.GL.drawingBufferHeight
+    };
+    this.viewport(
+      this._origViewport.width,
+      this._origViewport.height
     );
-    this._viewport = this.GL.getParameter(this.GL.VIEWPORT);
 
     this._curCamera._resize();
 
@@ -1849,7 +1875,12 @@ p5.RendererGL = class RendererGL extends p5.Renderer {
     if (!target) target = this.GL.ARRAY_BUFFER;
     this.GL.bindBuffer(target, buffer);
     if (values !== undefined) {
-      const data = new (type || Float32Array)(values);
+      let data = values;
+      if (values instanceof p5.DataArray) {
+        data = values.dataArray();
+      } else if (!(data instanceof (type || Float32Array))) {
+        data = new (type || Float32Array)(data);
+      }
       this.GL.bufferData(target, data, usage || this.GL.STATIC_DRAW);
     }
   }

@@ -122,9 +122,9 @@ suite('p5.RendererGL', function() {
     setup(function() {
       vert = `attribute vec3 aPosition;
       attribute vec2 aTexCoord;
-      
+
       varying vec2 vTexCoord;
-      
+
       void main() {
         vTexCoord = aTexCoord;
         vec4 positionVec4 = vec4(aPosition, 1.0);
@@ -134,13 +134,13 @@ suite('p5.RendererGL', function() {
 
       frag = `precision highp float;
       varying vec2 vTexCoord;
-      
+
       uniform sampler2D tex0;
-      
+
       float luma(vec3 color) {
         return dot(color, vec3(0.299, 0.587, 0.114));
       }
-      
+
       void main() {
         vec2 uv = vTexCoord;
         uv.y = 1.0 - uv.y;
@@ -148,9 +148,18 @@ suite('p5.RendererGL', function() {
         float gray = luma(sampledColor.rgb);
         gl_FragColor = vec4(gray, gray, gray, 1);
       }`;
-    });
 
-    teardown(function() {
+      notAllBlack = pixels => {
+        // black canvas could be an indicator of failed shader logic
+        for (let i = 0; i < pixels.length; i++) {
+          if (pixels[i]   !== 255 ||
+              pixels[i+1] !== 255 ||
+              pixels[i+2] !== 255) {
+            return true;
+          }
+        }
+        return false;
+      };
     });
 
     test('filter accepts correct params', function() {
@@ -268,6 +277,48 @@ suite('p5.RendererGL', function() {
       pg.loadPixels();
       let p2 = pg.pixels;
       assert.notDeepEqual(p1, p2);
+    });
+
+    test('POSTERIZE, BLUR, THRESHOLD work without supplied param', function() {
+      let testDefaultParams = () => {
+        myp5.createCanvas(3,3, myp5.WEBGL);
+        myp5.filter(myp5.POSTERIZE);
+        myp5.filter(myp5.BLUR);
+        myp5.filter(myp5.THRESHOLD);
+      };
+      assert.doesNotThrow(testDefaultParams, 'this should not throw');
+    });
+
+    test('filter() uses WEBGL implementation behind main P2D canvas', function() {
+      let renderer = myp5.createCanvas(3,3);
+      myp5.filter(myp5.BLUR);
+      assert.isDefined(renderer._pInst.filterGraphicsLayer);
+    });
+
+    test('filter() can opt out of WEBGL implementation', function() {
+      let renderer = myp5.createCanvas(3,3);
+      myp5.filter(myp5.BLUR, useWebGL=false);
+      assert.isUndefined(renderer._pInst.filterGraphicsLayer);
+    });
+
+    test('filters make changes to canvas', function() {
+      myp5.createCanvas(20,20);
+      myp5.circle(10,10,12);
+      let operations = [
+        myp5.BLUR,
+        myp5.THRESHOLD,
+        myp5.POSTERIZE,
+        myp5.INVERT,
+        myp5.DILATE,
+        myp5.ERODE,
+        myp5.GRAY,
+        myp5.OPAQUE
+      ];
+      for (let operation of operations) {
+        myp5.filter(operation);
+        myp5.loadPixels();
+        assert(notAllBlack(myp5.pixels));
+      }
     });
   });
 
@@ -1847,13 +1898,13 @@ suite('p5.RendererGL', function() {
       const attributes = renderer._curShader.attributes;
       const loc = attributes.aTexCoord.location;
 
-      assert.equal(renderer.registerEnabled[loc], true);
+      assert.equal(renderer.registerEnabled.has(loc), true);
 
       myp5.model(myGeom);
-      assert.equal(renderer.registerEnabled[loc], false);
+      assert.equal(renderer.registerEnabled.has(loc), false);
 
       myp5.triangle(-8, -8, 8, 8, -8, 8);
-      assert.equal(renderer.registerEnabled[loc], true);
+      assert.equal(renderer.registerEnabled.has(loc), true);
 
       done();
     });
@@ -1867,6 +1918,86 @@ suite('p5.RendererGL', function() {
       myp5.setAttributes({ alpha: true });
       assert.equal(myp5.canvas, renderer.canvas);
       done();
+    });
+  });
+
+  suite('instancing', function() {
+    test('instanced', function() {
+      let defShader;
+
+      const vertShader = `#version 300 es
+
+      in vec3 aPosition;
+      in vec2 aTexCoord;
+
+      uniform mat4 uModelViewMatrix;
+      uniform mat4 uProjectionMatrix;
+
+      out vec2 vTexCoord;
+
+      void main() {
+        vTexCoord = aTexCoord;
+
+        vec4 pos = vec4(aPosition, 1.0);
+        pos.x += float(gl_InstanceID);
+        vec4 wPos = uProjectionMatrix * uModelViewMatrix * pos;
+        gl_Position = wPos;
+      }`;
+
+      const fragShader = `#version 300 es
+
+      #ifdef GL_ES
+      precision mediump float;
+      #endif
+
+      in vec2 vTexCoord;
+
+      out vec4 fragColor;
+
+      void main() {
+        fragColor = vec4(1.0, 0.0, 0.0, 1.0);
+      }
+      `;
+
+      myp5.createCanvas(2, 1, myp5.WEBGL);
+      myp5.noStroke();
+      myp5.pixelDensity(1);
+
+      defShader = myp5.createShader(vertShader, fragShader);
+
+      myp5.background(0);
+      myp5.shader(defShader);
+      {
+        // Check to make sure that pixels are empty first
+        assert.deepEqual(
+          myp5.get(0, 0),
+          [0, 0, 0, 255]
+        );
+        assert.deepEqual(
+          myp5.get(1, 0),
+          [0, 0, 0, 255]
+        );
+
+        const siz = 1;
+        myp5.translate(-myp5.width / 2, -myp5.height / 2);
+        myp5.beginShape();
+        myp5.vertex(0, 0);
+        myp5.vertex(0, siz);
+        myp5.vertex(siz, siz);
+        myp5.vertex(siz, 0);
+        myp5.endShape(myp5.CLOSE, 2);
+
+        // check the pixels after instancing to make sure that they're the correct color
+        assert.deepEqual(
+          myp5.get(0, 0),
+          [255, 0, 0, 255]
+        );
+        assert.deepEqual(
+          myp5.get(1, 0),
+          [255, 0, 0, 255]
+        );
+      }
+      myp5.resetShader();
     });
   });
 
