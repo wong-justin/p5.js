@@ -149,12 +149,13 @@ suite('p5.RendererGL', function() {
         gl_FragColor = vec4(gray, gray, gray, 1);
       }`;
 
-      notAllBlack = pixels => {
-        // black canvas could be an indicator of failed shader logic
+      notAllBlack = (pixels, invert) => {
+        // black/white canvas could be an indicator of failed shader logic
+        let val = invert ? 255 : 0;
         for (let i = 0; i < pixels.length; i++) {
-          if (pixels[i]   !== 255 ||
-              pixels[i+1] !== 255 ||
-              pixels[i+2] !== 255) {
+          if (pixels[i]   !== val ||
+              pixels[i+1] !== val ||
+              pixels[i+2] !== val) {
             return true;
           }
         }
@@ -318,7 +319,49 @@ suite('p5.RendererGL', function() {
         myp5.filter(operation);
         myp5.loadPixels();
         assert(notAllBlack(myp5.pixels));
+        assert(notAllBlack(myp5.pixels, invert=true));
       }
+    });
+
+    test('feedback effects can be prevented (ie. clear() works)', function() {
+      myp5.createCanvas(20,20);
+      let drawAndFilter = () => {
+        myp5.circle(5,5,8);
+        myp5.filter(myp5.BLUR);
+      };
+      let getPixels = () => {
+        myp5.loadPixels();
+        return myp5.pixels.slice();
+      };
+
+      drawAndFilter();
+      let p1 = getPixels();
+
+      for (let i = 0; i < 5; i++) {
+        myp5.clear();
+        drawAndFilter();
+      }
+      let p2 = getPixels();
+
+      assert.deepEqual(p1, p2);
+    });
+
+    test('createFilterShader() accepts shader fragments in webgl version 2', function() {
+      myp5.createCanvas(5, 5, myp5.WEBGL);
+      let s = myp5.createFilterShader(`#version 300 es
+        precision highp float;
+        in vec2 vTexCoord;
+        out vec4 outColor;
+
+        uniform sampler2D tex0;
+
+        void main() {
+          vec4 sampledColor = texture(tex0, vTexCoord);
+          sampledColor.b = 1.0;
+          outColor = sampledColor;
+        }
+      `);
+      myp5.filter(s);
     });
   });
 
