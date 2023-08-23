@@ -1039,31 +1039,34 @@ p5.RendererGL = class RendererGL extends p5.Renderer {
     // apply blur shader with multiple passes
     if (operation === constants.BLUR) {
 
-      // pg is the accumulator. initialize with contents of main renderer (this)
-      pg.copy(
-        this,
-        0, 0, this.width, this.height,
-        -this.width/2, -this.height/2, this.width, this.height
-      );
-      // how much to blur, given by user
-      let steps = filterParameter;
+      // initial binding and setup
+      pg.shader(this.filterShader);
+      this.filterShader.setUniform('texelSize', [1/this.width, 1/this.height]);
 
-      for (let i = 0; i < steps; i++) {
-        // first pass averaging horizontal neighbors
-        pg.shader(this.filterShader);
-        this.filterShader.setUniform('texelSize', [1/this.width, 1/this.height]);
+      // do initial horizontal and vertical pass,
+      // starting with parent renderer as tex0 uniform
+      this.filterShader.setUniform('tex0', this);     // vertically flips first
+      this.filterShader.setUniform('flipped', false); // so undo it
+      this.filterShader.setUniform('direction', [2, 0]);
+      pg.rect(0,0,this.width,this.height);
+      this.filterShader.setUniform('tex0', pg);   // all other passes are unflipped
+      this.filterShader.setUniform('flipped', true);
+      this.filterShader.setUniform('direction', [0, 2]); // 2 is a decent
+      pg.rect(0,0,this.width,this.height);               //  default spread
+
+      // perform remaining steps, accumulating on pg
+      let steps = filterParameter; // how much to blur, given by user
+      for (let i = 1; i < steps; i++) {
         this.filterShader.setUniform('tex0', pg);
-        this.filterShader.setUniform('direction', [2, 0]); // 2 is a decent
-        pg.rect(0,0,this.width,this.height);               //  default spread
-        // another pass, this time vertically
-        pg.shader(this.filterShader);
-        // this.filterShader.setUniform('texelSize', [1/this.width, 1/this.height]);
+        this.filterShader.setUniform('direction', [2, 0]);
+        pg.rect(0,0,this.width,this.height);
+
         this.filterShader.setUniform('tex0', pg);
         this.filterShader.setUniform('direction', [0, 2]);
         pg.rect(0,0,this.width,this.height);
       }
     }
-    // every other shader gets single pass onto pg
+    // every other non-blur shader uses single pass
     else {
       pg.shader(this.filterShader);
       this.filterShader.setUniform('tex0', this);
